@@ -94,6 +94,13 @@ def user_oriented_ru_alcapa_prompt(item):
 Выход: '''.format_map(item)
 
 
+def user_oriented_instruct_rugpt(item):
+    if item['input']:
+        return '''{instruction} Ввод: "{input}"'''.format_map(item)
+    else:
+        return item['instruction']
+
+
 ########
 #
 #   OPENAI
@@ -147,6 +154,42 @@ def ru_alpaca_complete(prompt, model, tokenizer):
     decoded = tokenizer.decode(
         outputs[0],
         skip_special_tokens=True
-    ).strip()
+    )
+    return decoded[len(prompt):].strip()
 
-    return decoded[len(prompt):]
+
+########
+#
+#   INSTRUCT RUGPT
+#
+######
+
+
+def instruct_rugpt_complete(prompt, model, tokenizer):
+    input_ids = tokenizer(
+        prompt + '<instructionS>',
+        return_tensors='pt'
+    ).input_ids.to(model.device)
+
+    outputs = model.generate(
+        input_ids=input_ids,
+        min_length=20,
+        max_new_tokens=512,
+        top_k=50,
+        top_p=0.7,
+        do_sample=True,  
+        early_stopping=True,
+        no_repeat_ngram_size=2,
+        eos_token_id=tokenizer.eos_token_id,
+        pad_token_id=tokenizer.eos_token_id,
+        use_cache=True,
+        repetition_penalty=1.5,  
+        length_penalty=1.2,  
+        num_beams=4,
+    )
+
+    decoded = tokenizer.decode(
+        outputs[0],
+        skip_special_tokens=True
+    )
+    return decoded[len(prompt):].strip()
