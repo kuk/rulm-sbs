@@ -81,6 +81,19 @@ def user_oriented_openai_prompt(item):
 Ответ: '''.format_map(item)
 
 
+def user_oriented_ru_alcapa_prompt(item):
+    if item['input']:
+        return '''Задание: {instruction}
+Вход: {input}
+Выход: '''.format_map(item)
+    
+    else:
+        return '''Вопрос: {instruction}
+
+
+Выход: '''.format_map(item)
+
+
 ########
 #
 #   OPENAI
@@ -104,3 +117,36 @@ def openai_chat_complete(prompt, model='gpt-3.5-turbo'):
         max_tokens=1024,
     )
     return completion.choices[0].message.content
+
+
+######
+#
+#  RU ALPACA
+#
+####
+
+
+def ru_alpaca_complete(prompt, model, tokenizer):
+    input_ids = tokenizer(
+        prompt,
+        return_tensors='pt'
+    ).input_ids.to(model.device)
+
+    outputs = model.generate(
+        input_ids=input_ids,
+        num_beams=3,
+        max_length=256,
+        do_sample=True,
+        top_p=0.95,
+        top_k=40,
+        temperature=1.0,
+        repetition_penalty=1.2,
+        no_repeat_ngram_size=4
+    )
+
+    decoded = tokenizer.decode(
+        outputs[0],
+        skip_special_tokens=True
+    ).strip()
+
+    return decoded[len(prompt):]
