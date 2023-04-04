@@ -4,3 +4,11 @@ pandas
 openpyxl
 
 openai
+
+# gusev alpaca
+torch
+sentencepiece
+accelerate
+bitsandbytes
+git+https://github.com/huggingface/transformers.git
+git+https://github.com/huggingface/peft.git
