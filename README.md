@@ -151,10 +151,9 @@ jupyter notebook \
 Sync code and data
 
 ```
-scp tasks/* rulm-sbs:~/tasks
-scp evals/* rulm-sbs:~/evals
+scp -r tasks evals rulm-sbs:~
 scp main.* requirements.txt rulm-sbs:~
 
-scp 'rulm-sbs:~/evals/*' evals
+scp -r rulm-sbs:~/evals .
 scp 'rulm-sbs:~/main.*' .
 ```

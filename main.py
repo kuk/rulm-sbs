@@ -101,6 +101,16 @@ def user_oriented_instruct_rugpt(item):
         return item['instruction']
 
 
+def vicuna_question_ru_alcapa_prompt(item):
+        return '''Вопрос: {text}
+
+Ответ: '''.format_map(item)
+
+
+def vicuna_question_prompt(item):
+    return item['text']
+
+
 ########
 #
 #   OPENAI
