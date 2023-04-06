@@ -1,6 +1,9 @@
 
+import re
 import os
 import json
+from dataclasses import dataclass, fields
+from collections import defaultdict
 
 from tqdm import tqdm as log_progress
 
@@ -45,6 +48,54 @@ def format_jsonl(items):
         yield json.dumps(item, ensure_ascii=False, indent=None)
 
 
+######
+#
+#   ITEM
+#
+######
+
+
+# '' -> None
+# Value striped
+
+
+def format_items(items):
+    for item in items:
+        for key, value in item.items():
+            if not value:
+                continue
+
+            sep = '\n' if '\n' in value else ' '
+            yield f'{key}:{sep}{value}'
+
+        yield ''
+
+
+def parse_items(lines, keys):
+    buffer = defaultdict(list)
+
+    pattern = '|'.join(keys)
+    pattern = re.compile(rf'^({pattern}): ?(.*)$')
+
+    def join_buffer(buffer):
+        for key, lines in buffer.items():
+            value = '\n'.join(lines).strip()
+            yield key, value
+
+    key = None
+    for line in lines:
+        match = pattern.match(line)
+        if match:
+            key, line = match.groups()
+            if key in buffer:
+                yield dict(join_buffer(buffer))
+                buffer.clear()
+        buffer[key].append(line)
+
+    if buffer:
+        yield dict(join_buffer(buffer))
+
+
 ########
 #
 #   DOTENV
@@ -60,6 +111,32 @@ def parse_dotenv(lines):
         if line:
             key, value = line.split('=', 1)
             yield key, value
+
+
+####
+#
+#   TASK
+#
+#####
+
+
+@dataclass
+class TaskRecord:
+    id: str
+    category: str = None
+    orig_instruction: str = None
+    instruction: str = None
+    orig_input: str = None
+    input: str = None
+
+
+def load_task(path):
+    lines = read_lines(path)
+    keys = [_.name for _ in fields(TaskRecord)]
+    items = parse_items(lines, keys)
+
+    for item in items:
+        yield TaskRecord(**item)
 
 
 ######
@@ -165,7 +242,7 @@ def ru_alpaca_complete(prompt, model, tokenizer):
         outputs[0],
         skip_special_tokens=True
     )
-    return decoded[len(prompt):].strip()
+    return decoded[len(prompt):]
 
 
 ########
@@ -202,4 +279,4 @@ def instruct_rugpt_complete(prompt, model, tokenizer):
         outputs[0],
         skip_special_tokens=True
     )
-    return decoded[len(prompt):].strip()
+    return decoded[len(prompt):]
