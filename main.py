@@ -2,7 +2,7 @@
 import re
 import os
 import json
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, asdict
 from collections import defaultdict
 
 from tqdm import tqdm as log_progress
@@ -10,6 +10,11 @@ from tqdm import tqdm as log_progress
 import pandas as pd
 
 import openai
+
+
+GPT_35_TURBO = 'gpt-3.5-turbo'
+TEXT_DACINCI_003 = 'text-davinci-003'
+TEXT_DACINCI_002 = 'text-davinci-002'
 
 
 #######
@@ -48,54 +53,6 @@ def format_jsonl(items):
         yield json.dumps(item, ensure_ascii=False, indent=None)
 
 
-######
-#
-#   ITEM
-#
-######
-
-
-# '' -> None
-# Value striped
-
-
-def format_items(items):
-    for item in items:
-        for key, value in item.items():
-            if not value:
-                continue
-
-            sep = '\n' if '\n' in value else ' '
-            yield f'{key}:{sep}{value}'
-
-        yield ''
-
-
-def parse_items(lines, keys):
-    buffer = defaultdict(list)
-
-    pattern = '|'.join(keys)
-    pattern = re.compile(rf'^({pattern}): ?(.*)$')
-
-    def join_buffer(buffer):
-        for key, lines in buffer.items():
-            value = '\n'.join(lines).strip()
-            yield key, value
-
-    key = None
-    for line in lines:
-        match = pattern.match(line)
-        if match:
-            key, line = match.groups()
-            if key in buffer:
-                yield dict(join_buffer(buffer))
-                buffer.clear()
-        buffer[key].append(line)
-
-    if buffer:
-        yield dict(join_buffer(buffer))
-
-
 ########
 #
 #   DOTENV
@@ -115,7 +72,7 @@ def parse_dotenv(lines):
 
 ####
 #
-#   TASK
+#   OBJ
 #
 #####
 
@@ -124,19 +81,43 @@ def parse_dotenv(lines):
 class TaskRecord:
     id: str
     category: str = None
-    orig_instruction: str = None
     instruction: str = None
-    orig_input: str = None
     input: str = None
+
+
+@dataclass
+class EvalRecord:
+    id: str
+    prompt: str
+    output: str
+
+
+def item_records(items, cls):
+    for item in items:
+        yield cls(**item)
+
+
+def record_items(records):
+    for record in records:
+        yield asdict(record)
 
 
 def load_task(path):
     lines = read_lines(path)
-    keys = [_.name for _ in fields(TaskRecord)]
-    items = parse_items(lines, keys)
+    items = parse_jsonl(lines)
+    return item_records(items, TaskRecord)
 
-    for item in items:
-        yield TaskRecord(**item)
+
+def load_eval(path):
+    lines = read_lines(path)
+    items = parse_jsonl(lines)
+    return item_records(items, EvalRecord)
+
+
+def dump_eval(path, records):
+    items = record_items(records)
+    lines = format_jsonl(items)
+    write_lines(path, lines)
 
 
 ######
@@ -146,53 +127,82 @@ def load_task(path):
 ######
 
 
-def user_oriented_openai_prompt(item):
-    if item['input']:
-        return '''Задание: {instruction}
-Ввод: {input}
+def openai_en_prompt(record):
+    if record.input:
+        return f'''Instruction: {record.instruction}
+Input: {record.input}
 
-Ответ: '''.format_map(item)
+Output: '''
     else:
-        return '''Задание: {instruction}
-        
-Ответ: '''.format_map(item)
+        return record.instruction
 
 
-def user_oriented_ru_alcapa_prompt(item):
-    if item['input']:
-        return '''Задание: {instruction}
-Вход: {input}
-Выход: '''.format_map(item)
+def openai_ru_prompt(record):
+    if record.input:
+        return f'''Задание: {record.instruction}
+Ввод: {record.input}
+
+Ответ: '''
+    else:
+        return record.instruction
+
+
+def gusev_en_alpaca_prompt(record):
+    if record.input:
+        return f'''Instruction: {record.instruction}
+Input: {record.input}
+Output: '''
     
     else:
-        return '''Вопрос: {instruction}
+        return f'''Instruction: {record.instruction}
+
+Output: '''
 
 
-Выход: '''.format_map(item)
-
-
-def user_oriented_instruct_rugpt(item):
-    if item['input']:
-        return '''{instruction} Ввод: "{input}"'''.format_map(item)
+def gusev_ru_alpaca_prompt(record):
+    if record.input:
+        return f'''Задание: {record.instruction}
+Вход: {record.input}
+Выход: '''
+    
     else:
-        return item['instruction']
+        return f'''Вопрос: {record.instruction}
+
+Ответ: '''
 
 
-def vicuna_question_ru_alcapa_prompt(item):
-        return '''Вопрос: {text}
+def chainyo_alpaca_prompt(record):
+    if record.input:
+        return f'''Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request.
 
-Ответ: '''.format_map(item)
+### Instruction:
+{record.instruction}
+
+### Input:
+{record.input}
+
+### Response:'''
+    else:
+        return f'''Below is an instruction that describes a task. Write a response that appropriately completes the request.
+
+### Instruction:
+{record.instruction}
+
+### Response:'''
 
 
-def vicuna_question_prompt(item):
-    return item['text']
+def wortega_instruct_rugpt_prompt(record):
+    if record.input:
+        return f'''{record.instruction} Ввод: "{record.input}"'''
+    else:
+        return record.instruction
 
 
-########
-#
-#   OPENAI
-#
 ######
+#
+#    COMPLETE
+#
+####
 
 
 def openai_complete(prompt, model='text-davinci-003'):
@@ -213,14 +223,7 @@ def openai_chat_complete(prompt, model='gpt-3.5-turbo'):
     return completion.choices[0].message.content
 
 
-######
-#
-#  RU ALPACA
-#
-####
-
-
-def ru_alpaca_complete(prompt, model, tokenizer):
+def gusev_alpaca_complete(prompt, model, tokenizer):
     input_ids = tokenizer(
         prompt,
         return_tensors='pt'
@@ -229,13 +232,13 @@ def ru_alpaca_complete(prompt, model, tokenizer):
     outputs = model.generate(
         input_ids=input_ids,
         num_beams=3,
-        max_length=256,
+        max_length=512,
         do_sample=True,
         top_p=0.95,
         top_k=40,
         temperature=1.0,
         repetition_penalty=1.2,
-        no_repeat_ngram_size=4
+        no_repeat_ngram_size=5
     )
 
     decoded = tokenizer.decode(
@@ -245,14 +248,34 @@ def ru_alpaca_complete(prompt, model, tokenizer):
     return decoded[len(prompt):]
 
 
-########
-#
-#   INSTRUCT RUGPT
-#
-######
+def chainyo_alpaca_complete(prompt, model, tokenizer):
+    # for some reaso important to pass args via config
+    from transformers import GenerationConfig
+
+    input_ids = tokenizer(
+        prompt,
+        return_tensors='pt'
+    ).input_ids.to(model.device)
+
+    outputs = model.generate(
+        input_ids=input_ids,
+        generation_config=GenerationConfig(
+            temperature=0.2,
+            top_p=0.75,
+            top_k=40,
+            num_beams=4,
+            max_new_tokens=128,
+        )
+    )
+
+    decoded = tokenizer.decode(
+        outputs[0],
+        skip_special_tokens=True
+    )
+    return decoded[len(prompt):]
 
 
-def instruct_rugpt_complete(prompt, model, tokenizer):
+def wortega_instruct_rugpt_complete(prompt, model, tokenizer):
     input_ids = tokenizer(
         prompt + '<instructionS>',
         return_tensors='pt'
@@ -280,3 +303,56 @@ def instruct_rugpt_complete(prompt, model, tokenizer):
         skip_special_tokens=True
     )
     return decoded[len(prompt):]
+
+
+######
+#
+#   EVAL
+#
+#####
+
+
+def eval_gusev_en_alpaca(record, model, tokenizer):
+    prompt = gusev_en_alpaca_prompt(record)
+    output = gusev_alpaca_complete(prompt, model, tokenizer)
+    return EvalRecord(record.id, prompt, output)
+
+
+def eval_gusev_ru_alpaca(record, model, tokenizer):
+    prompt = gusev_ru_alpaca_prompt(record)
+    output = gusev_alpaca_complete(prompt, model, tokenizer)
+    return EvalRecord(record.id, prompt, output)
+
+
+def eval_chainyo_alpaca(record, model, tokenizer):
+    prompt = chainyo_alpaca_prompt(record)
+    output = chainyo_alpaca_complete(prompt, model, tokenizer)
+    return EvalRecord(record.id, prompt, output)
+
+
+def eval_wortega_instruct_rugpt(record, model, tokenizer):
+    prompt = wortega_instruct_rugpt_prompt(record)
+    output = wortega_instruct_rugpt_complete(prompt, model, tokenizer)
+    return EvalRecord(record.id, prompt, output)
+
+
+def eval_en_openai(record, model):
+    prompt = openai_en_prompt(record)
+    complete = (
+        openai_chat_complete
+        if model == GPT_35_TURBO
+        else openai_complete
+    )
+    output = complete(prompt, model)
+    return EvalRecord(record.id, prompt, output)
+
+
+def eval_ru_openai(record, model):
+    prompt = openai_ru_prompt(record)
+    complete = (
+        openai_chat_complete
+        if model == GPT_35_TURBO
+        else openai_complete
+    )
+    output = complete(prompt, model)
+    return EvalRecord(record.id, prompt, output)
