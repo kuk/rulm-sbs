@@ -356,3 +356,32 @@ def eval_ru_openai(record, model):
     )
     output = complete(prompt, model)
     return EvalRecord(record.id, prompt, output)
+
+
+######
+#
+#   SBS
+#
+######
+
+
+def sbs_table(a_records, b_records):
+    id_a_records = {_.id: _ for _ in a_records}
+    id_b_records = {_.id: _ for _ in b_records}
+
+    data = []
+    for id in sorted(id_a_records.keys() & id_b_records.keys()):
+        a_record = id_a_records[id]
+        b_record = id_b_records[id]
+
+        data.append([
+            id,
+            b_record.prompt,
+            a_record.output,
+            b_record.output,
+        ])
+
+    table = pd.DataFrame(data, columns=['id', 'prompt', 'a', 'b'])
+    table['label'] = None
+
+    return table
