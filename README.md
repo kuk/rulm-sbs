@@ -23,15 +23,25 @@ yc vpc subnet create \
   --range 192.168.0.0/24 \
   --zone ru-central1-a \
   --folder-name rulm-sbs
+yc vpc address create \
+  --name default \
+  --external-ipv4 zone=ru-central1-a \
+  --folder-name rulm-sbs
 
-yc compute image list --folder-id standard-images --format json
+address=$(yc vpc address get \
+  --name default \
+  --folder-name rulm-sbs \
+  --format json \
+  | jq -r .external_ipv4_address.address)
+
+yc compute image list --folder-id standard-images --format json | grep a100 | sort
 # ubuntu-2204-lts
 # ubuntu-2004-lts-gpu
 # ubuntu-2004-lts-a100
 
 yc compute disk create \
   --name default \
-  --source-image-family=ubuntu-2004-lts-a100 \
+  --source-image-name=ubuntu-20-04-lts-gpu-a100-v20230410 \
   --source-image-folder-id=standard-images \
   --type=network-ssd-nonreplicated \
   --size=186 \
@@ -61,7 +71,7 @@ yc compute instance create \
 # A100
 yc compute instance create \
   --name default \
-  --network-interface subnet-name=default,nat-ip-version=ipv4 \
+  --public-address $address \
   --use-boot-disk disk-name=default \
   --platform gpu-standard-v3  \
   --gpus=1 \
@@ -88,20 +98,11 @@ Up `~/.ssh/config`
 
 ```
 Host rulm-sbs
-  Hostname 62.84.118.238
+  Hostname $address
   User yc-user
 ```
 
-Install CUDA runtime. Required by bitsandbytes
-
-```
-wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/cuda-keyring_1.0-1_all.deb
-sudo dpkg -i cuda-keyring_1.0-1_all.deb
-sudo apt-get update
-sudo apt-get -y install cuda-11-7
-```
-
-Fix A100 Xid 119 https://github.com/NVIDIA/open-gpu-kernel-modules/issues/446#issuecomment-1476504064
+Fix A100 Xid 119 https://github.com/NVIDIA/open-gpu-kernel-modules/issues/446#issuecomment-1476504064? Seams to work in ubuntu-20-04-lts-gpu-a100-v20230410
 
 ```
 sudo nano /etc/modprobe.d/nvidia-gsp.conf
@@ -126,20 +127,54 @@ python3.10 -m venv ~/.env
 source ~/.env/bin/activate
 ```
 
+CUDA + bitsandbytes
+
+```
+wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/cuda-keyring_1.0-1_all.deb
+sudo dpkg -i cuda-keyring_1.0-1_all.deb
+sudo apt-get update
+sudo apt-get -y install cuda-drivers-515 cuda-toolkit-11-7
+
+# https://github.com/TimDettmers/bitsandbytes/blob/main/compile_from_source.md
+git clone https://github.com/TimDettmers/bitsandbytes.git
+echo "export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/cuda-11.7/lib64" >> ~/.bashrc
+echo "export PATH=$PATH:/usr/local/cuda-11.7" >> ~/.bashrc
+source ~/.bashrc
+
+make cuda11x CUDA_VERSION=117
+CUDA_VERSION=117 python setup.py install
+```
+
 Specific Torch version
 
 ```
 pip install torch==2.0.0+cu117 --extra-index-url https://download.pytorch.org/whl/cu117
 ```
 
+Other pip reqs
+
+```
+pip install \
+  matplotlib \
+  tqdm \
+  pandas \
+  openpyxl \
+  openai \
+  sentencepiece \
+  accelerate \
+  git+https://github.com/huggingface/transformers.git \
+  git+https://github.com/huggingface/peft.git
+```
+
 Setup Jupyter
 
 ```
 pip install jupyter
-sudo apt install -y screen
+
+screen -S jupyter
+screen -r jupyter
 
 # ok to have installation open to the world
-screen
 jupyter notebook \
   --no-browser \
   --ip=0.0.0.0 \
@@ -148,11 +183,21 @@ jupyter notebook \
   --NotebookApp.password=''
 ```
 
+Llama.cpp
+
+```
+git clone https://github.com/ggerganov/llama.cpp.git
+make
+
+sudo apt-get install git-lfs
+git clone https://huggingface.co/IlyaGusev/llama_7b_ru_turbo_alpaca_lora_llamacpp
+```
+
 Sync code and data
 
 ```
 scp -r tasks evals rulm-sbs:~
-scp main.* requirements.txt rulm-sbs:~
+scp main.* rulm-sbs:~
 
 scp -r rulm-sbs:~/evals .
 scp 'rulm-sbs:~/main.*' .
