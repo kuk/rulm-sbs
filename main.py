@@ -2,6 +2,9 @@
 import re
 import os
 import json
+import random
+import asyncio
+from pathlib import Path
 from dataclasses import dataclass, fields, asdict
 from collections import defaultdict
 
@@ -10,6 +13,24 @@ from tqdm import tqdm as log_progress
 import pandas as pd
 
 import openai
+
+# LLM.int8() requires Turing or Ampere GPUs.
+# WARNING: No libcudart.so found! Install CUDA or the cudatoolkit package (anaconda)!
+
+import torch
+from peft import (
+    PeftModel,
+    PeftConfig
+)
+from transformers import (
+    LlamaForCausalLM,
+    LlamaTokenizer,
+
+    GPT2TokenizerFast,
+    GPT2LMHeadModel,
+
+    GenerationConfig
+)
 
 
 GPT_35_TURBO = 'gpt-3.5-turbo'
@@ -147,7 +168,7 @@ def openai_ru_prompt(record):
         return record.instruction
 
 
-def gusev_en_alpaca_prompt(record):
+def gusev_alpaca_prompt(record):
     if record.input:
         return f'''Instruction: {record.instruction}
 Input: {record.input}
@@ -161,14 +182,28 @@ Output: '''
 
 def gusev_ru_alpaca_prompt(record):
     if record.input:
-        return f'''Задание: {record.instruction}
-Вход: {record.input}
-Выход: '''
+        return f'''### Задание: {record.instruction}
+### Вход: {record.input}
+### Ответ: '''
     
     else:
-        return f'''Вопрос: {record.instruction}
+        return f'''### Задание: {record.instruction}
+### Ответ: '''
 
-Ответ: '''
+
+def gusev_saiga_prompt(record):
+    content = record.instruction
+    if record.input:
+        content = f'''{content}
+
+{record.input}
+'''
+
+    return f'''<start>system
+Ты — Сайга, русскоязычный автоматический ассистент. Ты разговариваешь с людьми и помогаешь им. <end><start>user
+{content} <end>
+<start>system
+'''
 
 
 def chainyo_alpaca_prompt(record):
@@ -193,9 +228,9 @@ def chainyo_alpaca_prompt(record):
 
 def wortega_instruct_rugpt_prompt(record):
     if record.input:
-        return f'''{record.instruction} Ввод: "{record.input}"'''
+        return f'''{record.instruction} Ввод: "{record.input}"<instructionS>'''
     else:
-        return record.instruction
+        return f'{record.instruction}<instructionS>'
 
 
 ######
@@ -223,136 +258,76 @@ def openai_chat_complete(prompt, model='gpt-3.5-turbo'):
     return completion.choices[0].message.content
 
 
-def gusev_alpaca_complete(prompt, model, tokenizer):
-    input_ids = tokenizer(
-        prompt,
-        return_tensors='pt'
-    ).input_ids.to(model.device)
-
-    outputs = model.generate(
-        input_ids=input_ids,
-        num_beams=3,
-        max_length=512,
-        do_sample=True,
-        top_p=0.95,
-        top_k=40,
-        temperature=1.0,
-        repetition_penalty=1.2,
-        no_repeat_ngram_size=5
+def model_batch_complete(records, model, tokenizer, generation_config, batch_size=8):
+    records = [_ for _ in records if not _.output]
+    records = sorted(
+        records,
+        key=lambda _: len(_.prompt)
     )
 
-    decoded = tokenizer.decode(
-        outputs[0],
-        skip_special_tokens=True
-    )
-    return decoded[len(prompt):]
+    for index in range(0, len(records), batch_size):
+        batch_records = records[index:index + batch_size]
+        batch = tokenizer(
+            [_.prompt for _ in batch_records],
+            return_tensors='pt',
+            padding=True
+        ).to(model.device)
 
-
-def chainyo_alpaca_complete(prompt, model, tokenizer):
-    # for some reaso important to pass args via config
-    from transformers import GenerationConfig
-
-    input_ids = tokenizer(
-        prompt,
-        return_tensors='pt'
-    ).input_ids.to(model.device)
-
-    outputs = model.generate(
-        input_ids=input_ids,
-        generation_config=GenerationConfig(
-            temperature=0.2,
-            top_p=0.75,
-            top_k=40,
-            num_beams=4,
-            max_new_tokens=128,
+        outputs = model.generate(
+            input_ids=batch.input_ids,
+            attention_mask=batch.attention_mask,
+            generation_config=generation_config
         )
-    )
 
-    decoded = tokenizer.decode(
-        outputs[0],
-        skip_special_tokens=True
-    )
-    return decoded[len(prompt):]
-
-
-def wortega_instruct_rugpt_complete(prompt, model, tokenizer):
-    input_ids = tokenizer(
-        prompt + '<instructionS>',
-        return_tensors='pt'
-    ).input_ids.to(model.device)
-
-    outputs = model.generate(
-        input_ids=input_ids,
-        min_length=20,
-        max_new_tokens=512,
-        top_k=50,
-        top_p=0.7,
-        do_sample=True,  
-        early_stopping=True,
-        no_repeat_ngram_size=2,
-        eos_token_id=tokenizer.eos_token_id,
-        pad_token_id=tokenizer.eos_token_id,
-        use_cache=True,
-        repetition_penalty=1.5,  
-        length_penalty=1.2,  
-        num_beams=4,
-    )
-
-    decoded = tokenizer.decode(
-        outputs[0],
-        skip_special_tokens=True
-    )
-    return decoded[len(prompt):]
+        for record, output in zip(batch_records, outputs):
+            output = tokenizer.decode(
+                output,
+                skip_special_tokens=True
+            )
+            record.output = output[len(record.prompt):]
+            print(record)
 
 
-######
+#######
 #
-#   EVAL
+#   LLAMACPP
 #
-#####
+########
 
 
-def eval_gusev_en_alpaca(record, model, tokenizer):
-    prompt = gusev_en_alpaca_prompt(record)
-    output = gusev_alpaca_complete(prompt, model, tokenizer)
-    return EvalRecord(record.id, prompt, output)
-
-
-def eval_gusev_ru_alpaca(record, model, tokenizer):
-    prompt = gusev_ru_alpaca_prompt(record)
-    output = gusev_alpaca_complete(prompt, model, tokenizer)
-    return EvalRecord(record.id, prompt, output)
-
-
-def eval_chainyo_alpaca(record, model, tokenizer):
-    prompt = chainyo_alpaca_prompt(record)
-    output = chainyo_alpaca_complete(prompt, model, tokenizer)
-    return EvalRecord(record.id, prompt, output)
-
-
-def eval_wortega_instruct_rugpt(record, model, tokenizer):
-    prompt = wortega_instruct_rugpt_prompt(record)
-    output = wortega_instruct_rugpt_complete(prompt, model, tokenizer)
-    return EvalRecord(record.id, prompt, output)
-
-
-def eval_en_openai(record, model):
-    prompt = openai_en_prompt(record)
-    complete = (
-        openai_chat_complete
-        if model == GPT_35_TURBO
-        else openai_complete
+async def llamacpp_complete(prompt, main_path, model_path, threads, generation_args):
+    proc = await asyncio.create_subprocess_exec(
+        str(main_path),
+        '--prompt', prompt,
+        '--model', str(model_path),
+        '--threads', str(threads),
+        *generation_args,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
     )
-    output = complete(prompt, model)
-    return EvalRecord(record.id, prompt, output)
+    data = await proc.stdout.read()
+    output = data.decode('utf8')
+    return output[len(prompt):]
 
 
-def eval_ru_openai(record, model):
-    prompt = openai_ru_prompt(record)
-    complete = (
-        openai_chat_complete
-        if model == GPT_35_TURBO
-        else openai_complete
-    )
-    output = complete(prompt, model)
-    return EvalRecord(record.id, prompt, output)
+async def batch_llamacpp_complete(
+        records, main_path, model_path, generation_args,
+        threads=8, pool_size=4
+):
+    records = [_ for _ in records if not _.output]
+    records = iter(records)
+    
+    async def worker(records):
+        for record in records:
+            record.output = await llamacpp_complete(
+                record.prompt,
+                main_path, model_path,
+                threads, generation_args
+            )
+            print(record)
+
+    tasks = [
+        worker(records)
+        for _ in range(pool_size)
+    ]
+    await asyncio.gather(*tasks)
