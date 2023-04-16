@@ -171,8 +171,7 @@ Setup Jupyter
 ```
 pip install jupyter
 
-screen -S jupyter
-screen -r jupyter
+screen
 
 # ok to have installation open to the world
 jupyter notebook \

@@ -29,6 +29,9 @@ from transformers import (
     GPT2TokenizerFast,
     GPT2LMHeadModel,
 
+    AutoTokenizer,
+    AutoModelForSeq2SeqLM,
+
     GenerationConfig
 )
 
@@ -206,6 +209,13 @@ def gusev_saiga_prompt(record):
 '''
 
 
+def gusev_fred_prompt(record):
+    if record.input:
+        return f'''Задание: {record.instruction} Дано: {record.input}'''
+    else:
+        return f'Задание: {record.instruction}'
+
+
 def chainyo_alpaca_prompt(record):
     if record.input:
         return f'''Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request.
@@ -280,11 +290,10 @@ def model_batch_complete(records, model, tokenizer, generation_config, batch_siz
         )
 
         for record, output in zip(batch_records, outputs):
-            output = tokenizer.decode(
+            record.output = tokenizer.decode(
                 output,
                 skip_special_tokens=True
             )
-            record.output = output[len(record.prompt):]
             print(record)
 
 
