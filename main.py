@@ -30,6 +30,7 @@ from transformers import (
     GPT2LMHeadModel,
 
     AutoTokenizer,
+    AutoModelForCausalLM,
     AutoModelForSeq2SeqLM,
 
     GenerationConfig
@@ -54,8 +55,8 @@ def read_lines(path):
             yield line.rstrip('\n')
 
 
-def write_lines(path, lines):
-    with open(path, 'w') as file:
+def write_lines(path, lines, encoding='utf8'):
+    with open(path, 'w', encoding=encoding) as file:
         for line in lines:
             file.write(line + '\n')
 
@@ -205,7 +206,7 @@ def gusev_saiga_prompt(record):
     return f'''<start>system
 Ты — Сайга, русскоязычный автоматический ассистент. Ты разговариваешь с людьми и помогаешь им. <end><start>user
 {content} <end>
-<start>system
+<start>bot
 '''
 
 
@@ -241,6 +242,15 @@ def wortega_instruct_rugpt_prompt(record):
         return f'''{record.instruction} Ввод: "{record.input}"<instructionS>'''
     else:
         return f'{record.instruction}<instructionS>'
+
+
+def oasst_prompt(record):
+    if record.input:
+        prompt = f'{record.instruction}\n\n{record.input}'
+    else:
+        prompt = record.instruction
+
+    return f'<|prompter|>{prompt}<|endoftext|><|assistant|>'
 
 
 ######
